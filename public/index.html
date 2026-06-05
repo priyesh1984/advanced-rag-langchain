@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RAG Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+  </head>
+  <body class="bg-gray-900 text-white font-sans h-screen flex flex-col">
+    <header
+      class="bg-gray-800 p-4 text-center border-b border-gray-700 shadow-md"
+    >
+      <h1 class="text-xl font-bold text-emerald-400">RAG Chat Demo</h1>
+      <p class="text-xs text-gray-400">Using LangChain, Ollama & Pinecone</p>
+    </header>
+
+    <div
+      id="chat-box"
+      class="flex-1 overflow-y-auto p-4 space-y-4 max-w-3xl mx-auto w-full"
+    >
+      <div class="flex items-start gap-2.5">
+        <div
+          class="bg-emerald-600 text-white p-3 rounded-lg rounded-tl-none max-w-[80%] shadow"
+        >
+          <p class="text-sm">Lets get started!</p>
+        </div>
+      </div>
+    </div>
+
+    <footer class="bg-gray-800 p-4 border-t border-gray-700">
+      <div class="max-w-3xl mx-auto flex gap-2">
+        <input
+          type="text"
+          id="user-input"
+          placeholder="Ask about system architecture..."
+          class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 text-white placeholder-gray-400 focus:outline-none focus:border-emerald-500"
+        />
+        <button
+          id="send-btn"
+          onclick="sendMessage()"
+          class="bg-emerald-500 hover:bg-emerald-600 text-white px-5 py-2 rounded-lg font-medium transition duration-200"
+        >
+          Send
+        </button>
+      </div>
+    </footer>
+
+    <script>
+      const chatBox = document.getElementById("chat-box");
+      const userInput = document.getElementById("user-input");
+
+      // एंटर की दाबल्यावर मेसेज पाठवण्यासाठी
+      userInput.addEventListener("keypress", (e) => {
+        if (e.key === "Enter") sendMessage();
+      });
+
+      async function sendMessage() {
+        const text = userInput.value.trim();
+        if (!text) return;
+
+        // १. युझरचा मेसेज स्क्रीनवर दाखवा
+        appendMessage(text, "user");
+        userInput.value = "";
+
+        // २. बोटचा रिकामा मेसेज बॉक्स तयार करा (जिथे स्ट्रीमिंग डेटा दिसेल)
+        const botMessageDiv = appendMessage("⏳ Thinking...", "bot");
+
+        try {
+          // ३. बॅकएंड API ला कॉल करा
+          const response = await fetch("/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ question: text }),
+          });
+
+          // ४. रिस्पॉन्सचा स्ट्रीम (Reader) वाचणे सुरू करा
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let botResponseText = "";
+          botMessageDiv.innerHTML = ""; // Thinking मजकूर पुसून टाका
+
+          while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+
+            // आलेला चंक डिकोड करा
+            const chunk = decoder.decode(value, { stream: true });
+
+            // Server-Sent Events चा डेटा 'data: ' ने सुरू होतो, तो स्प्लिट करा
+            const lines = chunk.split("\n");
+            for (const line of lines) {
+              if (line.startsWith("data: ")) {
+                const dataStr = line.replace("data: ", "").trim();
+
+                if (dataStr === "[DONE]") {
+                  break;
+                }
+
+                try {
+                  const parsed = JSON.parse(dataStr);
+                  if (parsed.text) {
+                    botResponseText += parsed.text;
+                    botMessageDiv.innerHTML = `<p class="text-sm">${botResponseText}</p>`;
+                    // चॅट बॉक्स स्क्रोल डाऊन करा
+                    chatBox.scrollTop = chatBox.scrollHeight;
+                  }
+                } catch (e) {
+                  // अर्धवट राहिलेले JSON चंक्स कधीकधी एरर देतात, ते दुर्लक्षित करा
+                }
+              }
+            }
+          }
+        } catch (error) {
+          console.error("Frontend Fetch Error:", error);
+          botMessageDiv.innerText = "❌ Error receiving response.";
+        }
+      }
+
+      function appendMessage(text, sender) {
+        const wrapper = document.createElement("div");
+        wrapper.className =
+          sender === "user"
+            ? "flex items-start justify-end gap-2.5 my-2"
+            : "flex items-start gap-2.5 my-2";
+
+        const bubble = document.createElement("div");
+
+        if (sender === "user") {
+          bubble.className =
+            "bg-emerald-500 text-white p-3 rounded-lg rounded-tr-none max-w-[80%] shadow text-sm";
+          bubble.innerText = text;
+        } else {
+          // बोटच्या बबलसाठी स्टाईल आणि इनलाईन लिस्ट रेंडरिंग सपोर्ट
+          bubble.className =
+            "bg-gray-700 text-white p-4 rounded-lg rounded-tl-none max-w-[90%] shadow border border-gray-600 text-gray-200 text-sm overflow-x-auto leading-relaxed";
+
+          // 💡 टेलविंडला लिस्ट आयटम्स सक्तीने नवीन लाईनवर दाखवायला सांगणारे स्पेशल क्लासेस
+          bubble.classList.add(
+            "[&_p]:mb-3",
+            "[&_ul]:list-disc",
+            "[&_ul]:pl-6",
+            "[&_ul]:my-3",
+            "[&_ul]:block",
+            "[&_li]:mb-2",
+            "[&_li]:list-item",
+            "[&_li]:block",
+            "whitespace-pre-line",
+          );
+
+          // जर मजकुरात '* ' ने सुरू होणाऱ्या ओळी असतील तर त्यांचे खऱ्या HTML लिस्टमध्ये रूपांतर करणे
+          let formattedText = text;
+          if (text.includes("* ")) {
+            // स्टार्सचे रुपांतर खऱ्या <li> टॅग्जमध्ये करून त्यांना <ul> च्या आत टाकणे
+            const lines = text.split("\n");
+            let inList = false;
+            let htmlOutput = [];
+
+            lines.forEach((line) => {
+              if (line.trim().startsWith("* ")) {
+                if (!inList) {
+                  htmlOutput.push('<ul class="list-disc pl-6 my-2 block">');
+                  inList = true;
+                }
+                const content = line.replace("* ", "").trim();
+                htmlOutput.push(`<li class="mb-2 list-item">${content}</li>`);
+              } else {
+                if (inList) {
+                  htmlOutput.push("</ul>");
+                  inList = false;
+                }
+                htmlOutput.push(line);
+              }
+            });
+            if (inList) htmlOutput.push("</ul>");
+            formattedText = htmlOutput.join("\n");
+          }
+
+          // जर तुम्ही 'marked' लायब्ररी वापरत असाल तर तीही इथे सुरक्षितपणे चालेल
+          if (typeof marked !== "undefined") {
+            bubble.innerHTML = marked.parse(formattedText);
+          } else {
+            bubble.innerHTML = formattedText;
+          }
+        }
+
+        wrapper.appendChild(bubble);
+        chatBox.appendChild(wrapper);
+        chatBox.scrollTop = chatBox.scrollHeight;
+
+        return bubble;
+      }
+    </script>
+  </body>
+</html>
